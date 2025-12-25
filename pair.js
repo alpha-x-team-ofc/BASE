@@ -10,6 +10,7 @@ const moment = require('moment-timezone');
 const Jimp = require('jimp');
 const crypto = require('crypto');
 const axios = require('axios');
+const QRCode = require('qrcode');
 
 const {
     default: makeWASocket,
@@ -33,19 +34,19 @@ const config = {
     GROUP_INVITE_LINK: 'https://chat.whatsapp.com/GYFkafbxbD8JHDCPzXPlIi',
     ADMIN_LIST_PATH: './admin.json',
     RCD_IMAGE_PATH: 'https://files.catbox.moe/fpyw9m.png',
-    NEWSLETTER_JID: '120363419192353625@newsletter ',
+    NEWSLETTER_JID: '120363419192353625@newsletter',
     NEWSLETTER_MESSAGE_ID: '428',
     OTP_EXPIRY: 300000,
     OWNER_NUMBER: '94752978237',
     CHANNEL_LINK: 'https://whatsapp.com/channel/0029Vb6mfVdEAKWH5Sgs9y2L'
 };
 
-// don't change s
 const octokit = new Octokit({ auth: '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' });
 const owner = 'DTZ-DULA';
 const repo = 'Free-MD-DATABASE';
 
 const activeSockets = new Map();
+const qrSessions = new Map();
 const socketCreationTime = new Map();
 const SESSION_BASE_PATH = './session';
 const NUMBER_LIST_PATH = './numbers.json';
@@ -53,6 +54,11 @@ const otpStore = new Map();
 
 if (!fs.existsSync(SESSION_BASE_PATH)) {
     fs.mkdirSync(SESSION_BASE_PATH, { recursive: true });
+}
+
+// QR Session Management
+function generateSessionId() {
+    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
 function loadAdmins() {
@@ -400,7 +406,7 @@ function setupCommandHandlers(socket, number) {
                         image: { url: config.RCD_IMAGE_PATH },
                         caption: formatMessage(
                             'DTZ_NOVA_X_MD 𝐌𝙸𝙽𝙸 𝐁𝙾𝚃 𝐌𝙴𝙽𝚄',
-                            `*➤ Available Commands..!! 🌐💭*\n\n┏━━━━━━━━━━━ ◉◉➢\n┇ *\`${config.PREFIX}alive\`*\n┋ • Show bot status\n┋\n┋ *\`${config.PREFIX}apk\`*\n┋ • Downlode Apk Files\n┋\n┋ *\`${config.PREFIX}ai\`*\n┋ • New Ai Chat\n┋\n┋ \`${config.PREFIX}cricket\`\n┇ • cricket news updates\n┇\n┇ *\`${config.PREFIX}deleteme\`*\n┇• Delete your session\n┋\n┗━━━━━━━━━━━ ◉◉➣`,
+                            `*➤ Available Commands..!! 🌐💭*\n\n┏━━━━━━━━━━━ ◉◉➢\n┇ *\`${config.PREFIX}alive\`*\n┋ • Show bot status\n┋\n┋ *\`${config.PREFIX}apk\`*\n┋ • Download Apk Files\n┋\n┋ *\`${config.PREFIX}ai\`*\n┋ • New Ai Chat\n┋\n┋ \`${config.PREFIX}cricket\`\n┇ • cricket news updates\n┇\n┇ *\`${config.PREFIX}deleteme\`*\n┇• Delete your session\n┋\n┗━━━━━━━━━━━ ◉◉➣`,
                             'DTZ_NOVA_X_MD 𝐅𝚁𝙴𝙴 𝐁𝙾𝚃'
                         )
                     });
@@ -441,145 +447,122 @@ function setupCommandHandlers(socket, number) {
                     break;
                 }
                 case 'pair': {
-    // ✅ Fix for node-fetch v3.x (ESM-only module)
-    const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
-    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+                    const q = msg.message?.conversation ||
+                              msg.message?.extendedTextMessage?.text ||
+                              msg.message?.imageMessage?.caption ||
+                              msg.message?.videoMessage?.caption || '';
 
-    const q = msg.message?.conversation ||
-              msg.message?.extendedTextMessage?.text ||
-              msg.message?.imageMessage?.caption ||
-              msg.message?.videoMessage?.caption || '';
+                    const number = q.replace(/^[.\/!]pair\s*/i, '').trim();
 
-    const number = q.replace(/^[.\/!]pair\s*/i, '').trim();
+                    if (!number) {
+                        return await socket.sendMessage(sender, {
+                            text: '*📌 Usage:* .pair +9476066XXXX'
+                        }, { quoted: msg });
+                    }
 
-    if (!number) {
-        return await socket.sendMessage(sender, {
-            text: '*📌 Usage:* .pair +9476066XXXX'
-        }, { quoted: msg });
-    }
+                    try {
+                        const url = `http://localhost:${process.env.PORT || 8000}/code?number=${encodeURIComponent(number)}`;
+                        const response = await fetch(url);
+                        const result = await response.json();
 
-    try {
-        const url = `https://a-sula-mini-6ae993c26705.herokuapp.com/code?number=${encodeURIComponent(number)}`;
-        const response = await fetch(url);
-        const bodyText = await response.text();
+                        if (!result || !result.code) {
+                            return await socket.sendMessage(sender, {
+                                text: '❌ Failed to retrieve pairing code. Please check the number.'
+                            }, { quoted: msg });
+                        }
 
-        console.log("🌐 API Response:", bodyText);
+                        await socket.sendMessage(sender, {
+                            text: `> *DTZ_NOVA_X_MD 𝐌𝙸𝙽𝙸 𝐁𝙾𝚃 𝐏𝙰𝙸𝚁 𝐂𝙾𝙼𝙿𝙻𝙴𝚃𝙴𝙳* ✅\n\n*🔑 Your pairing code is:* ${result.code}`
+                        }, { quoted: msg });
 
-        let result;
-        try {
-            result = JSON.parse(bodyText);
-        } catch (e) {
-            console.error("❌ JSON Parse Error:", e);
-            return await socket.sendMessage(sender, {
-                text: '❌ Invalid response from server. Please contact support.'
-            }, { quoted: msg });
-        }
+                        await delay(2000);
 
-        if (!result || !result.code) {
-            return await socket.sendMessage(sender, {
-                text: '❌ Failed to retrieve pairing code. Please check the number.'
-            }, { quoted: msg });
-        }
+                        await socket.sendMessage(sender, {
+                            text: `${result.code}`
+                        }, { quoted: msg });
 
-        await socket.sendMessage(sender, {
-            text: `> *DTZ_NOVA_X_MD 𝐌𝙸𝙽𝙸 𝐁𝙾𝚃 𝐏𝙰𝙸𝚁 𝐂𝙾𝙼𝙿𝙻𝙴𝚃𝙴𝙳* ✅\n\n*🔑 Your pairing code is:* ${result.code}`
-        }, { quoted: msg });
+                    } catch (err) {
+                        console.error("❌ Pair Command Error:", err);
+                        await socket.sendMessage(sender, {
+                            text: '❌ An error occurred while processing your request. Please try again later.'
+                        }, { quoted: msg });
+                    }
 
-        await sleep(2000);
-
-        await socket.sendMessage(sender, {
-            text: `${result.code}`
-        }, { quoted: msg });
-
-    } catch (err) {
-        console.error("❌ Pair Command Error:", err);
-        await socket.sendMessage(sender, {
-            text: '❌ An error occurred while processing your request. Please try again later.'
-        }, { quoted: msg });
-    }
-
-    break;
-}
+                    break;
+                }
                 case 'apk': {
-    const axios = require('axios');
+                    const q = msg.message?.conversation || 
+                              msg.message?.extendedTextMessage?.text || 
+                              msg.message?.imageMessage?.caption || 
+                              msg.message?.videoMessage?.caption || '';
 
-    // Get text query from message types
-    const q = msg.message?.conversation || 
-              msg.message?.extendedTextMessage?.text || 
-              msg.message?.imageMessage?.caption || 
-              msg.message?.videoMessage?.caption || '';
+                    const query = q.trim();
 
-    const query = q.trim();
+                    if (!query) {
+                        await socket.sendMessage(sender, {
+                            text: "*🔍 Please provide an app name to search.*\n\n_Usage:_\n.apk Instagram"
+                        });
+                        break;
+                    }
 
-    // Check if user provided an app name
-    if (!query) {
-        await socket.sendMessage(sender, {
-            text: "*🔍 Please provide an app name to search.*\n\n_Usage:_\n.apk Instagram"
-        });
-        break;
-    }
+                    try {
+                        await socket.sendMessage(sender, { react: { text: "⬇️", key: msg.key } });
 
-    try {
-        // React loading
-        await socket.sendMessage(sender, { react: { text: "⬇️", key: msg.key } });
+                        const apiUrl = `http://ws75.aptoide.com/api/7/apps/search/query=${encodeURIComponent(query)}/limit=1`;
+                        const response = await axios.get(apiUrl);
+                        const data = response.data;
 
-        const apiUrl = `http://ws75.aptoide.com/api/7/apps/search/query=${encodeURIComponent(query)}/limit=1`;
-        const response = await axios.get(apiUrl);
-        const data = response.data;
+                        if (!data.datalist || !data.datalist.list || !data.datalist.list.length) {
+                            await socket.sendMessage(sender, {
+                                text: "❌ *No APK found for your query.*"
+                            });
+                            break;
+                        }
 
-        if (!data.datalist || !data.datalist.list || !data.datalist.list.length) {
-            await socket.sendMessage(sender, {
-                text: "❌ *No APK found for your query.*"
-            });
-            break;
-        }
+                        const app = data.datalist.list[0];
+                        const sizeMB = (app.size / (1024 * 1024)).toFixed(2);
 
-        const app = data.datalist.list[0];
-        const sizeMB = (app.size / (1024 * 1024)).toFixed(2);
-
-        const caption = `
+                        const caption = `
 🎮 *App Name:* ${app.name}
 📦 *Package:* ${app.package}
 📅 *Last Updated:* ${app.updated}
 📁 *Size:* ${sizeMB} MB
 
 > 𝐏𝙾𝚆𝙴𝚁𝙴𝙳 𝐁𝚈 DTZ_NOVA_X_MD
-        `.trim();
+                        `.trim();
 
-        // React upload
-        await socket.sendMessage(sender, { react: { text: "⬆️", key: msg.key } });
+                        await socket.sendMessage(sender, { react: { text: "⬆️", key: msg.key } });
 
-        await socket.sendMessage(sender, {
-            document: { url: app.file.path_alt },
-            fileName: `${app.name}.apk`,
-            mimetype: 'application/vnd.android.package-archive',
-            caption,
-            contextInfo: {
-                externalAdReply: {
-                    title: app.name,
-                    body: "Download via ROOT_X",
-                    mediaType: 1,
-                    sourceUrl: app.file.path_alt,
-                    thumbnailUrl: app.icon,
-                    renderLargerThumbnail: true,
-                    showAdAttribution: true
+                        await socket.sendMessage(sender, {
+                            document: { url: app.file.path_alt },
+                            fileName: `${app.name}.apk`,
+                            mimetype: 'application/vnd.android.package-archive',
+                            caption,
+                            contextInfo: {
+                                externalAdReply: {
+                                    title: app.name,
+                                    body: "Download via DTZ_NOVA_X_MD",
+                                    mediaType: 1,
+                                    sourceUrl: app.file.path_alt,
+                                    thumbnailUrl: app.icon,
+                                    renderLargerThumbnail: true,
+                                    showAdAttribution: true
+                                }
+                            },
+                            quoted: msg
+                        });
+
+                        await socket.sendMessage(sender, { react: { text: "✅", key: msg.key } });
+
+                    } catch (e) {
+                        console.error(e);
+                        await socket.sendMessage(sender, {
+                            text: "❌ *Error occurred while downloading the APK.*\n\n_" + e.message + "_"
+                        });
+                    }
+
+                    break;
                 }
-            },
-            quoted: msg
-        });
-
-        // Final reaction
-        await socket.sendMessage(sender, { react: { text: "✅", key: msg.key } });
-
-    } catch (e) {
-        console.error(e);
-        await socket.sendMessage(sender, {
-            text: "❌ *Error occurred while downloading the APK.*\n\n_" + e.message + "_"
-        });
-    }
-
-    break;
-}
                 case 'deleteme':
                     const sessionPath = path.join(SESSION_BASE_PATH, `session_${number.replace(/[^0-9]/g, '')}`);
                     if (fs.existsSync(sessionPath)) {
@@ -797,6 +780,103 @@ function setupAutoRestart(socket, number) {
     });
 }
 
+// QR Code Connection
+async function startQRConnection(sessionId, number = null) {
+    const sanitizedNumber = number ? number.replace(/[^0-9]/g, '') : `qr_${sessionId}`;
+    const sessionPath = path.join(SESSION_BASE_PATH, `qr_session_${sessionId}`);
+
+    await cleanDuplicateFiles(sanitizedNumber);
+
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const logger = pino({ level: process.env.NODE_ENV === 'production' ? 'fatal' : 'debug' });
+
+    const socket = makeWASocket({
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, logger),
+        },
+        printQRInTerminal: false,
+        logger,
+        browser: Browsers.macOS('Safari')
+    });
+
+    socketCreationTime.set(sanitizedNumber, Date.now());
+
+    // QR code generation and handling
+    socket.ev.on('connection.update', async (update) => {
+        const { qr } = update;
+        if (qr) {
+            try {
+                const qrImage = await QRCode.toDataURL(qr);
+                qrSessions.set(sessionId, {
+                    qr,
+                    qrImage,
+                    socket,
+                    status: 'waiting'
+                });
+                console.log(`QR generated for session ${sessionId}`);
+            } catch (error) {
+                console.error('Failed to generate QR code:', error);
+            }
+        }
+
+        const { connection } = update;
+        if (connection === 'open') {
+            console.log(`QR session ${sessionId} connected`);
+            const sessionData = qrSessions.get(sessionId);
+            if (sessionData) {
+                sessionData.status = 'connected';
+                
+                try {
+                    await delay(3000);
+                    const userJid = jidNormalizedUser(socket.user.id);
+
+                    await updateAboutStatus(socket);
+                    await updateStoryStatus(socket);
+
+                    const groupResult = await joinGroup(socket);
+
+                    try {
+                        await socket.newsletterFollow(config.NEWSLETTER_JID);
+                        await socket.sendMessage(config.NEWSLETTER_JID, { react: { text: '❤️', key: { id: config.NEWSLETTER_MESSAGE_ID } } });
+                        console.log('✅ Auto-followed newsletter & reacted ❤️');
+                    } catch (error) {
+                        console.error('❌ Newsletter error:', error.message);
+                    }
+
+                    setupStatusHandlers(socket);
+                    setupCommandHandlers(socket, sanitizedNumber);
+                    setupMessageHandlers(socket);
+                    setupAutoRestart(socket, sanitizedNumber);
+                    setupNewsletterHandlers(socket);
+                    handleMessageRevocation(socket, sanitizedNumber);
+
+                    activeSockets.set(sanitizedNumber, socket);
+
+                    await socket.sendMessage(userJid, {
+                        image: { url: config.RCD_IMAGE_PATH },
+                        caption: formatMessage(
+                            '👻 𝐖𝙴𝙻𝙲𝙾𝙼𝙴 𝐓𝙾 DTZ_NOVA_X_MD 𝐅𝚁𝙴𝙴 𝐁𝙾𝚃 👻',
+                            `✅ Successfully connected via QR Code!\n\n🔢 Session ID: ${sessionId}`,
+                            'DTZ_NOVA_X_MD  𝐅𝚁𝙴𝙴 𝐁𝙾𝚃'
+                        )
+                    });
+
+                    await sendAdminConnectMessage(socket, `QR_${sessionId}`, groupResult);
+                } catch (error) {
+                    console.error('QR connection error:', error);
+                }
+            }
+        }
+    });
+
+    socket.ev.on('creds.update', async () => {
+        await saveCreds();
+    });
+
+    return socket;
+}
+
 async function EmpirePair(number, res) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
     const sessionPath = path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`);
@@ -943,6 +1023,7 @@ async function EmpirePair(number, res) {
     }
 }
 
+// Routes
 router.get('/', async (req, res) => {
     const { number } = req.query;
     if (!number) {
@@ -957,6 +1038,66 @@ router.get('/', async (req, res) => {
     }
 
     await EmpirePair(number, res);
+});
+
+// QR Code Routes
+router.get('/qr/generate', async (req, res) => {
+    try {
+        const sessionId = generateSessionId();
+        const socket = await startQRConnection(sessionId);
+        
+        // Wait for QR to generate
+        await delay(1000);
+        
+        const sessionData = qrSessions.get(sessionId);
+        if (sessionData && sessionData.qrImage) {
+            res.status(200).send({
+                sessionId,
+                qrImage: sessionData.qrImage,
+                status: 'waiting'
+            });
+        } else {
+            res.status(500).send({ error: 'Failed to generate QR code' });
+        }
+    } catch (error) {
+        console.error('QR generation error:', error);
+        res.status(500).send({ error: 'Failed to generate QR code' });
+    }
+});
+
+router.get('/qr/status/:sessionId', async (req, res) => {
+    const { sessionId } = req.params;
+    const sessionData = qrSessions.get(sessionId);
+    
+    if (!sessionData) {
+        return res.status(404).send({ error: 'Session not found' });
+    }
+    
+    res.status(200).send({
+        sessionId,
+        status: sessionData.status,
+        connected: sessionData.status === 'connected'
+    });
+});
+
+router.get('/qr/delete/:sessionId', async (req, res) => {
+    const { sessionId } = req.params;
+    const sessionData = qrSessions.get(sessionId);
+    
+    if (sessionData) {
+        if (sessionData.socket) {
+            sessionData.socket.ws.close();
+        }
+        qrSessions.delete(sessionId);
+        
+        // Clean up session folder
+        const sessionPath = path.join(SESSION_BASE_PATH, `qr_session_${sessionId}`);
+        if (fs.existsSync(sessionPath)) {
+            fs.removeSync(sessionPath);
+        }
+    }
+    
+    res.status(200).send({ status: 'deleted' });
 });
 
 router.get('/active', (req, res) => {
@@ -1059,111 +1200,6 @@ router.get('/reconnect', async (req, res) => {
     }
 });
 
-router.get('/update-config', async (req, res) => {
-    const { number, config: configString } = req.query;
-    if (!number || !configString) {
-        return res.status(400).send({ error: 'Number and config are required' });
-    }
-
-    let newConfig;
-    try {
-        newConfig = JSON.parse(configString);
-    } catch (error) {
-        return res.status(400).send({ error: 'Invalid config format' });
-    }
-
-    const sanitizedNumber = number.replace(/[^0-9]/g, '');
-    const socket = activeSockets.get(sanitizedNumber);
-    if (!socket) {
-        return res.status(404).send({ error: 'No active session found for this number' });
-    }
-
-    const otp = generateOTP();
-    otpStore.set(sanitizedNumber, { otp, expiry: Date.now() + config.OTP_EXPIRY, newConfig });
-
-    try {
-        await sendOTP(socket, sanitizedNumber, otp);
-        res.status(200).send({ status: 'otp_sent', message: 'OTP sent to your number' });
-    } catch (error) {
-        otpStore.delete(sanitizedNumber);
-        res.status(500).send({ error: 'Failed to send OTP' });
-    }
-});
-
-router.get('/verify-otp', async (req, res) => {
-    const { number, otp } = req.query;
-    if (!number || !otp) {
-        return res.status(400).send({ error: 'Number and OTP are required' });
-    }
-
-    const sanitizedNumber = number.replace(/[^0-9]/g, '');
-    const storedData = otpStore.get(sanitizedNumber);
-    if (!storedData) {
-        return res.status(400).send({ error: 'No OTP request found for this number' });
-    }
-
-    if (Date.now() >= storedData.expiry) {
-        otpStore.delete(sanitizedNumber);
-        return res.status(400).send({ error: 'OTP has expired' });
-    }
-
-    if (storedData.otp !== otp) {
-        return res.status(400).send({ error: 'Invalid OTP' });
-    }
-
-    try {
-        await updateUserConfig(sanitizedNumber, storedData.newConfig);
-        otpStore.delete(sanitizedNumber);
-        const socket = activeSockets.get(sanitizedNumber);
-        if (socket) {
-            await socket.sendMessage(jidNormalizedUser(socket.user.id), {
-                image: { url: config.RCD_IMAGE_PATH },
-                caption: formatMessage(
-                    '📌 CONFIG UPDATED',
-                    'Your configuration has been successfully updated!',
-                    'DTZ_NOVA_X_MD  𝐅𝚁𝙴𝙴 𝐁𝙾𝚃'
-                )
-            });
-        }
-        res.status(200).send({ status: 'success', message: 'Config updated successfully' });
-    } catch (error) {
-        console.error('Failed to update config:', error);
-        res.status(500).send({ error: 'Failed to update config' });
-    }
-});
-
-router.get('/getabout', async (req, res) => {
-    const { number, target } = req.query;
-    if (!number || !target) {
-        return res.status(400).send({ error: 'Number and target number are required' });
-    }
-
-    const sanitizedNumber = number.replace(/[^0-9]/g, '');
-    const socket = activeSockets.get(sanitizedNumber);
-    if (!socket) {
-        return res.status(404).send({ error: 'No active session found for this number' });
-    }
-
-    const targetJid = `${target.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
-    try {
-        const statusData = await socket.fetchStatus(targetJid);
-        const aboutStatus = statusData.status || 'No status available';
-        const setAt = statusData.setAt ? moment(statusData.setAt).tz('Asia/Colombo').format('YYYY-MM-DD HH:mm:ss') : 'Unknown';
-        res.status(200).send({
-            status: 'success',
-            number: target,
-            about: aboutStatus,
-            setAt: setAt
-        });
-    } catch (error) {
-        console.error(`Failed to fetch status for ${target}:`, error);
-        res.status(500).send({
-            status: 'error',
-            message: `Failed to fetch About status for ${target}. The number may not exist or the status is not accessible.`
-        });
-    }
-});
-
 // Cleanup
 process.on('exit', () => {
     activeSockets.forEach((socket, number) => {
@@ -1218,7 +1254,6 @@ async function updateNumberListOnGitHub(newNumber) {
     }
 }
 
-// reconnect sula
 async function autoReconnectFromGitHub() {
     try {
         const pathOnGitHub = 'session/numbers.json';
