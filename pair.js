@@ -4,10 +4,8 @@ const path = require('path');
 const { exec } = require('child_process');
 const router = express.Router();
 const pino = require('pino');
-const cheerio = require('cheerio');
 const { Octokit } = require('@octokit/rest');
 const moment = require('moment-timezone');
-const Jimp = require('jimp');
 const crypto = require('crypto');
 const axios = require('axios');
 const QRCode = require('qrcode');
@@ -19,9 +17,7 @@ const {
     makeCacheableSignalKeyStore,
     Browsers,
     jidNormalizedUser,
-    proto,
-    prepareWAMessageMedia,
-    generateWAMessageFromContent
+    proto
 } = require('baileys');
 
 const config = {
@@ -342,20 +338,6 @@ async function handleMessageRevocation(socket, number) {
     });
 }
 
-async function resize(image, width, height) {
-    let oyy = await Jimp.read(image);
-    let kiyomasa = await oyy.resize(width, height).getBufferAsync(Jimp.MIME_JPEG);
-    return kiyomasa;
-}
-
-function capital(string) {
-    return string.charAt(0).toUpperCase() + string.slice(1);
-}
-
-const createSerial = (size) => {
-    return crypto.randomBytes(size).toString('hex').slice(0, size);
-}
-
 function setupCommandHandlers(socket, number) {
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
@@ -411,158 +393,6 @@ function setupCommandHandlers(socket, number) {
                         )
                     });
                     break;
-                case 'fc': {
-                    if (args.length === 0) {
-                        return await socket.sendMessage(sender, {
-                            text: '❗ Please provide a channel JID.\n\nExample:\n.fcn 120363396379901844@newsletter'
-                        });
-                    }
-
-                    const jid = args[0];
-                    if (!jid.endsWith("@newsletter")) {
-                        return await socket.sendMessage(sender, {
-                            text: '❗ Invalid JID. Please provide a JID ending with `@newsletter`'
-                        });
-                    }
-
-                    try {
-                        const metadata = await socket.newsletterMetadata("jid", jid);
-                        if (metadata?.viewer_metadata === null) {
-                            await socket.newsletterFollow(jid);
-                            await socket.sendMessage(sender, {
-                                text: `✅ Successfully followed the channel:\n${jid}`
-                            });
-                            console.log(`FOLLOWED CHANNEL: ${jid}`);
-                        } else {
-                            await socket.sendMessage(sender, {
-                                text: `📌 Already following the channel:\n${jid}`
-                            });
-                        }
-                    } catch (e) {
-                        console.error('❌ Error in follow channel:', e.message);
-                        await socket.sendMessage(sender, {
-                            text: `❌ Error: ${e.message}`
-                        });
-                    }
-                    break;
-                }
-                case 'pair': {
-                    const q = msg.message?.conversation ||
-                              msg.message?.extendedTextMessage?.text ||
-                              msg.message?.imageMessage?.caption ||
-                              msg.message?.videoMessage?.caption || '';
-
-                    const number = q.replace(/^[.\/!]pair\s*/i, '').trim();
-
-                    if (!number) {
-                        return await socket.sendMessage(sender, {
-                            text: '*📌 Usage:* .pair +9476066XXXX'
-                        }, { quoted: msg });
-                    }
-
-                    try {
-                        const url = `http://localhost:${process.env.PORT || 8000}/code?number=${encodeURIComponent(number)}`;
-                        const response = await fetch(url);
-                        const result = await response.json();
-
-                        if (!result || !result.code) {
-                            return await socket.sendMessage(sender, {
-                                text: '❌ Failed to retrieve pairing code. Please check the number.'
-                            }, { quoted: msg });
-                        }
-
-                        await socket.sendMessage(sender, {
-                            text: `> *DTZ_NOVA_X_MD 𝐌𝙸𝙽𝙸 𝐁𝙾𝚃 𝐏𝙰𝙸𝚁 𝐂𝙾𝙼𝙿𝙻𝙴𝚃𝙴𝙳* ✅\n\n*🔑 Your pairing code is:* ${result.code}`
-                        }, { quoted: msg });
-
-                        await delay(2000);
-
-                        await socket.sendMessage(sender, {
-                            text: `${result.code}`
-                        }, { quoted: msg });
-
-                    } catch (err) {
-                        console.error("❌ Pair Command Error:", err);
-                        await socket.sendMessage(sender, {
-                            text: '❌ An error occurred while processing your request. Please try again later.'
-                        }, { quoted: msg });
-                    }
-
-                    break;
-                }
-                case 'apk': {
-                    const q = msg.message?.conversation || 
-                              msg.message?.extendedTextMessage?.text || 
-                              msg.message?.imageMessage?.caption || 
-                              msg.message?.videoMessage?.caption || '';
-
-                    const query = q.trim();
-
-                    if (!query) {
-                        await socket.sendMessage(sender, {
-                            text: "*🔍 Please provide an app name to search.*\n\n_Usage:_\n.apk Instagram"
-                        });
-                        break;
-                    }
-
-                    try {
-                        await socket.sendMessage(sender, { react: { text: "⬇️", key: msg.key } });
-
-                        const apiUrl = `http://ws75.aptoide.com/api/7/apps/search/query=${encodeURIComponent(query)}/limit=1`;
-                        const response = await axios.get(apiUrl);
-                        const data = response.data;
-
-                        if (!data.datalist || !data.datalist.list || !data.datalist.list.length) {
-                            await socket.sendMessage(sender, {
-                                text: "❌ *No APK found for your query.*"
-                            });
-                            break;
-                        }
-
-                        const app = data.datalist.list[0];
-                        const sizeMB = (app.size / (1024 * 1024)).toFixed(2);
-
-                        const caption = `
-🎮 *App Name:* ${app.name}
-📦 *Package:* ${app.package}
-📅 *Last Updated:* ${app.updated}
-📁 *Size:* ${sizeMB} MB
-
-> 𝐏𝙾𝚆𝙴𝚁𝙴𝙳 𝐁𝚈 DTZ_NOVA_X_MD
-                        `.trim();
-
-                        await socket.sendMessage(sender, { react: { text: "⬆️", key: msg.key } });
-
-                        await socket.sendMessage(sender, {
-                            document: { url: app.file.path_alt },
-                            fileName: `${app.name}.apk`,
-                            mimetype: 'application/vnd.android.package-archive',
-                            caption,
-                            contextInfo: {
-                                externalAdReply: {
-                                    title: app.name,
-                                    body: "Download via DTZ_NOVA_X_MD",
-                                    mediaType: 1,
-                                    sourceUrl: app.file.path_alt,
-                                    thumbnailUrl: app.icon,
-                                    renderLargerThumbnail: true,
-                                    showAdAttribution: true
-                                }
-                            },
-                            quoted: msg
-                        });
-
-                        await socket.sendMessage(sender, { react: { text: "✅", key: msg.key } });
-
-                    } catch (e) {
-                        console.error(e);
-                        await socket.sendMessage(sender, {
-                            text: "❌ *Error occurred while downloading the APK.*\n\n_" + e.message + "_"
-                        });
-                    }
-
-                    break;
-                }
                 case 'deleteme':
                     const sessionPath = path.join(SESSION_BASE_PATH, `session_${number.replace(/[^0-9]/g, '')}`);
                     if (fs.existsSync(sessionPath)) {
@@ -1023,7 +853,7 @@ async function EmpirePair(number, res) {
     }
 }
 
-// Routes
+// Main Routes
 router.get('/', async (req, res) => {
     const { number } = req.query;
     if (!number) {
@@ -1274,6 +1104,9 @@ async function autoReconnectFromGitHub() {
     }
 }
 
-autoReconnectFromGitHub();
+// Auto reconnect on startup
+setTimeout(() => {
+    autoReconnectFromGitHub();
+}, 5000);
 
 module.exports = router;
